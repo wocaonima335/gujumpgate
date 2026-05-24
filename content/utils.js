@@ -48,6 +48,10 @@ function getRuntimeScriptSource() {
 const LOG_PREFIX = `[MultiPage:${SCRIPT_SOURCE}]`;
 const STOP_ERROR_MESSAGE = '流程已被用户停止。';
 let flowStopped = false;
+const INTERNAL_INTERRUPT_ERROR_PREFIX = 'FLOW_INTERRUPTED::';
+const INTERNAL_INTERRUPT_STOP_REASON = 'internal_restart';
+const INTERNAL_INTERRUPT_ERROR_MESSAGE = `${INTERNAL_INTERRUPT_ERROR_PREFIX}流程因后台恢复或重试而被中断。`;
+let flowStopErrorMessage = '';
 
 if (!window.__MULTIPAGE_UTILS_LISTENER_READY__) {
   window.__MULTIPAGE_UTILS_LISTENER_READY__ = true;
@@ -55,7 +59,11 @@ if (!window.__MULTIPAGE_UTILS_LISTENER_READY__) {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'STOP_FLOW') {
       flowStopped = true;
-      console.warn(LOG_PREFIX, STOP_ERROR_MESSAGE);
+      const stopReason = String(message?.payload?.stopReason || '').trim().toLowerCase();
+      flowStopErrorMessage = stopReason === INTERNAL_INTERRUPT_STOP_REASON
+        ? INTERNAL_INTERRUPT_ERROR_MESSAGE
+        : STOP_ERROR_MESSAGE;
+      console.warn(LOG_PREFIX, flowStopErrorMessage);
       return;
     }
 
@@ -71,6 +79,7 @@ if (!window.__MULTIPAGE_UTILS_LISTENER_READY__) {
 
 function resetStopState() {
   flowStopped = false;
+  flowStopErrorMessage = '';
 }
 
 function isStopError(error) {
@@ -78,9 +87,22 @@ function isStopError(error) {
   return message === STOP_ERROR_MESSAGE;
 }
 
+function isInternalInterruptError(error) {
+  const message = typeof error === 'string' ? error : error?.message;
+  return String(message || '').startsWith(INTERNAL_INTERRUPT_ERROR_PREFIX);
+}
+
+function getFlowStopErrorMessage() {
+  return flowStopErrorMessage || STOP_ERROR_MESSAGE;
+}
+
+function buildFlowStopError() {
+  return new Error(getFlowStopErrorMessage());
+}
+
 function throwIfStopped() {
   if (flowStopped) {
-    throw new Error(STOP_ERROR_MESSAGE);
+    throw buildFlowStopError();
   }
 }
 
@@ -118,7 +140,7 @@ function waitForElement(selector, timeout = 10000) {
     const observer = new MutationObserver(() => {
       if (flowStopped) {
         cleanup();
-        reject(new Error(STOP_ERROR_MESSAGE));
+        reject(buildFlowStopError());
         return;
       }
       const el = document.querySelector(selector);
@@ -146,7 +168,7 @@ function waitForElement(selector, timeout = 10000) {
       if (settled) return;
       if (flowStopped) {
         cleanup();
-        reject(new Error(STOP_ERROR_MESSAGE));
+        reject(buildFlowStopError());
         return;
       }
       stopTimer = setTimeout(pollStop, 100);
@@ -200,7 +222,7 @@ function waitForElementByText(containerSelector, textPattern, timeout = 10000) {
     const observer = new MutationObserver(() => {
       if (flowStopped) {
         cleanup();
-        reject(new Error(STOP_ERROR_MESSAGE));
+        reject(buildFlowStopError());
         return;
       }
       const el = search();
@@ -228,7 +250,7 @@ function waitForElementByText(containerSelector, textPattern, timeout = 10000) {
       if (settled) return;
       if (flowStopped) {
         cleanup();
-        reject(new Error(STOP_ERROR_MESSAGE));
+        reject(buildFlowStopError());
         return;
       }
       stopTimer = setTimeout(pollStop, 100);
@@ -531,7 +553,7 @@ function sleep(ms) {
 
     function tick() {
       if (flowStopped) {
-        reject(new Error(STOP_ERROR_MESSAGE));
+        reject(buildFlowStopError());
         return;
       }
       if (Date.now() - start >= ms) {

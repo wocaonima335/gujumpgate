@@ -72,6 +72,7 @@
       failNodeFromBackground = null,
       fetch: fetchImpl = null,
       getState = null,
+      isInternalInterruptError = null,
       requestStop = null,
       registerTab,
       restoreCheckoutScopedProxySnapshot = null,
@@ -1564,6 +1565,10 @@ function FindProxyForURL(url, host) {
       void runHostedCheckoutAutomation(tabId, completionPayload)
         .catch(async (error) => {
           const message = error?.message || String(error || 'hosted checkout automation failed');
+          if (typeof isInternalInterruptError === 'function' && isInternalInterruptError(error)) {
+            await addLog('步骤 6：hosted checkout 自动化收到后台内部恢复中断信号，当前结果将交给自动运行重试逻辑接管。', 'warn');
+            return;
+          }
           if (isHostedCheckoutNonFreeTrialFailure(error)) {
             const stopReason = stripHostedCheckoutNonFreeTrialPrefix(message)
               || '步骤 6：检测到当前账号没有免费试用资格，已自动停止整个流程。';

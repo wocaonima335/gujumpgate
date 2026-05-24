@@ -24,9 +24,11 @@
       hasSavedNodeProgress,
       isAddPhoneAuthFailure,
       isGpcTaskEndedFailure,
+      isInternalInterruptError = null,
       isPhoneSmsPlatformRateLimitFailure,
       isPlusCheckoutNonFreeTrialFailure,
       isRestartCurrentAttemptError,
+      isAutoRunSessionInactiveError = null,
       isStep4Route405RecoveryLimitFailure,
       isSignupUserAlreadyExistsFailure,
       isStopError,
@@ -118,6 +120,16 @@
 
     function getAutoRunRoundRetryCount(summary) {
       return Math.max(0, Number(summary?.attempts || 0) - 1);
+    }
+
+    function formatAutoRunStopReason(errorLike = null) {
+      if (typeof isInternalInterruptError === 'function' && isInternalInterruptError(errorLike)) {
+        return '内部恢复中断';
+      }
+      if (typeof isAutoRunSessionInactiveError === 'function' && isAutoRunSessionInactiveError(errorLike)) {
+        return 'Service Worker 会话失活';
+      }
+      return '用户停止';
     }
 
     function normalizeRecordNode(value = '') {
@@ -391,6 +403,8 @@
       console.error('Auto run loop crashed:', error);
       if (!isStopError(error)) {
         await addLog(`自动运行异常终止：${getErrorMessage(error) || '未知错误'}`, 'error');
+      } else {
+        await addLog(`自动运行已中断：${formatAutoRunStopReason(error)}。`, 'warn');
       }
 
       runtime.set({ autoRunActive: false, autoRunSessionId: 0 });
@@ -640,7 +654,7 @@
             if (isStopError(err)) {
               stoppedEarly = true;
               await appendRoundRecordIfNeeded('stopped', getErrorMessage(err), err);
-              await addLog(`第 ${targetRun}/${totalRuns} 轮已被用户停止`, 'warn');
+              await addLog(`第 ${targetRun}/${totalRuns} 轮已中断：${formatAutoRunStopReason(err)}。`, 'warn');
               await broadcastAutoRunStatus('stopped', {
                 currentRun: targetRun,
                 totalRuns,
@@ -920,7 +934,7 @@
                 if (isStopError(sleepError)) {
                   stoppedEarly = true;
                   await appendRoundRecordIfNeeded('stopped', getErrorMessage(sleepError), sleepError);
-                  await addLog(`第 ${targetRun}/${totalRuns} 轮已被用户停止`, 'warn');
+                  await addLog(`第 ${targetRun}/${totalRuns} 轮已中断：${formatAutoRunStopReason(sleepError)}。`, 'warn');
                   await broadcastAutoRunStatus('stopped', {
                     currentRun: targetRun,
                     totalRuns,
@@ -944,7 +958,7 @@
                 if (isStopError(sleepError)) {
                   stoppedEarly = true;
                   await appendRoundRecordIfNeeded('stopped', getErrorMessage(sleepError), sleepError);
-                  await addLog(`第 ${targetRun}/${totalRuns} 轮已被用户停止`, 'warn');
+                  await addLog(`第 ${targetRun}/${totalRuns} 轮已中断：${formatAutoRunStopReason(sleepError)}。`, 'warn');
                   await broadcastAutoRunStatus('stopped', {
                     currentRun: targetRun,
                     totalRuns,
@@ -1012,7 +1026,7 @@
         } catch (sleepError) {
           if (isStopError(sleepError)) {
             stoppedEarly = true;
-            await addLog(`第 ${targetRun}/${totalRuns} 轮已被用户停止`, 'warn');
+            await addLog(`第 ${targetRun}/${totalRuns} 轮已中断：${formatAutoRunStopReason(sleepError)}。`, 'warn');
             await broadcastAutoRunStatus('stopped', {
               currentRun: targetRun,
               totalRuns,

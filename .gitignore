@@ -16,3 +16,8 @@ __pycache__/
 /release-artifacts/
 # Local exported runtime settings
 /config.json
+
+# Local secrets / private signing material
+extension_key.pem
+extension_pub.der
+screenshot.png

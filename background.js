@@ -464,6 +464,10 @@ const CLOUD_MAIL_GENERATOR = 'cloudmail';
 const CUSTOM_EMAIL_POOL_GENERATOR = 'custom-pool';
 const HOTMAIL_MAILBOXES = ['INBOX', 'Junk'];
 const STOP_ERROR_MESSAGE = '流程已被用户停止。';
+const INTERNAL_INTERRUPT_ERROR_PREFIX = 'FLOW_INTERRUPTED::';
+const INTERNAL_INTERRUPT_STOP_REASON = 'internal_restart';
+const INTERNAL_INTERRUPT_ERROR_MESSAGE = `${INTERNAL_INTERRUPT_ERROR_PREFIX}流程因后台恢复或重试而被中断。`;
+const AUTO_RUN_SESSION_INACTIVE_ERROR_PREFIX = 'AUTO_RUN_SESSION_INACTIVE::';
 const CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX = 'CF_SECURITY_BLOCKED::';
 const CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE = '您已触发Cloudflare 安全防护系统，已完全停止流程，请不要短时间内多次进行重新发送验证码，连续刷新、反复点击重试会加重风控；请先关闭页面等待 15-30 分钟，让系统的临时限制自动解除。或者更换浏览器';
 const BROWSER_SWITCH_REQUIRED_ERROR_PREFIX = 'BROWSER_SWITCH_REQUIRED::';
@@ -2151,10 +2155,10 @@ function isCurrentAutoRunSessionId(value) {
 
 function throwIfAutoRunSessionStopped(sessionId) {
   const normalizedSessionId = normalizeAutoRunSessionId(sessionId);
-  if (normalizedSessionId && !isCurrentAutoRunSessionId(normalizedSessionId)) {
-    throw new Error(STOP_ERROR_MESSAGE);
-  }
   throwIfStopped();
+  if (normalizedSessionId && !isCurrentAutoRunSessionId(normalizedSessionId)) {
+    throw buildAutoRunSessionInactiveError(normalizedSessionId);
+  }
 }
 
 function normalizeAutoRunTimerPlan(plan) {
@@ -9129,6 +9133,26 @@ function isStopError(error) {
   return message === STOP_ERROR_MESSAGE;
 }
 
+function isInternalInterruptError(error) {
+  const message = typeof error === 'string' ? error : error?.message;
+  return String(message || '').startsWith(INTERNAL_INTERRUPT_ERROR_PREFIX);
+}
+
+function buildInternalInterruptError(reason = INTERNAL_INTERRUPT_STOP_REASON) {
+  const normalizedReason = String(reason || INTERNAL_INTERRUPT_STOP_REASON).trim() || INTERNAL_INTERRUPT_STOP_REASON;
+  return new Error(`${INTERNAL_INTERRUPT_ERROR_PREFIX}${normalizedReason}`);
+}
+
+function isAutoRunSessionInactiveError(error) {
+  const message = typeof error === 'string' ? error : error?.message;
+  return String(message || '').startsWith(AUTO_RUN_SESSION_INACTIVE_ERROR_PREFIX);
+}
+
+function buildAutoRunSessionInactiveError(sessionId) {
+  const normalizedSessionId = normalizeAutoRunSessionId(sessionId);
+  return new Error(`${AUTO_RUN_SESSION_INACTIVE_ERROR_PREFIX}${normalizedSessionId || 0}`);
+}
+
 function isRetryableContentScriptTransportError(error) {
   const message = String(typeof error === 'string' ? error : error?.message || '');
   return /back\/forward cache|message channel is closed|Receiving end does not exist|port closed before a response was received|A listener indicated an asynchronous response|内容脚本\s+\d+(?:\.\d+)?\s*秒内未响应|did not respond in \d+s|failed to fetch|networkerror|network error|fetch failed|load failed/i.test(message);
@@ -10362,6 +10386,80 @@ async function restoreAutoRunTimerIfNeeded() {
   await ensureAutoRunTimerAlarm(plan.fireAt);
 }
 
+let activeAutoRunRestoring = false;
+
+async function restoreActiveAutoRunIfNeeded() {
+  if (activeAutoRunRestoring || autoRunActive) {
+    return false;
+  }
+
+  activeAutoRunRestoring = true;
+  try {
+    const state = await getState();
+    if (getPendingAutoRunTimerPlan(state)) {
+      return false;
+    }
+    if (!Boolean(state?.autoRunning)) {
+      return false;
+    }
+
+    const phase = String(state?.autoRunPhase || '').trim().toLowerCase();
+    if (!['running', 'waiting_step', 'waiting_email', 'retrying'].includes(phase)) {
+      return false;
+    }
+
+    const totalRuns = normalizeRunCount(state?.autoRunTotalRuns || 1);
+    const currentRun = Math.max(1, Math.min(totalRuns, Math.floor(Number(state?.autoRunCurrentRun) || 1)));
+    const attemptRun = Math.max(
+      1,
+      Math.min(AUTO_RUN_MAX_RETRIES_PER_ROUND + 1, Math.floor(Number(state?.autoRunAttemptRun) || 1))
+    );
+
+    let sessionId = normalizeAutoRunSessionId(state?.autoRunSessionId);
+    if (!sessionId) {
+      sessionId = createAutoRunSessionId();
+      await setState({ autoRunSessionId: sessionId });
+    } else {
+      setCurrentAutoRunSessionId(sessionId);
+    }
+
+    const runningNodes = getRunningNodeIds(state?.nodeStatuses, state);
+    if (runningNodes.length) {
+      const recoveredNodeStatuses = { ...(state?.nodeStatuses || {}) };
+      for (const nodeId of runningNodes) {
+        recoveredNodeStatuses[nodeId] = 'pending';
+      }
+      await setState({
+        nodeStatuses: recoveredNodeStatuses,
+        currentNodeId: runningNodes[0] || state?.currentNodeId || '',
+      });
+      for (const nodeId of runningNodes) {
+        chrome.runtime.sendMessage({
+          type: 'NODE_STATUS_CHANGED',
+          payload: { nodeId, status: 'pending' },
+        }).catch(() => { });
+      }
+    }
+
+    await addLog(
+      `检测到 Service Worker 重启，正在恢复自动流程（第 ${currentRun}/${totalRuns} 轮，第 ${attemptRun} 次尝试，阶段：${phase}）。`,
+      'warn'
+    );
+
+    startAutoRunLoop(totalRuns, {
+      autoRunSessionId: sessionId,
+      autoRunSkipFailures: Boolean(state?.autoRunSkipFailures),
+      mode: 'continue',
+      resumeCurrentRun: currentRun,
+      resumeAttemptRun: attemptRun,
+      resumeRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, state?.autoRunRoundSummaries),
+    });
+    return true;
+  } finally {
+    activeAutoRunRestoring = false;
+  }
+}
+
 async function ensureManualInteractionAllowed(actionLabel) {
   const state = await getState();
 
@@ -10507,7 +10605,8 @@ async function clickWithDebugger(tabId, rect, options = {}) {
   }
 }
 
-async function broadcastStopToContentScripts() {
+async function broadcastStopToContentScripts(options = {}) {
+  const stopReason = String(options?.stopReason || '').trim().toLowerCase();
   const registry = await getTabRegistry();
   for (const entry of Object.values(registry)) {
     if (!entry?.tabId) continue;
@@ -10515,7 +10614,9 @@ async function broadcastStopToContentScripts() {
       await chrome.tabs.sendMessage(entry.tabId, {
         type: 'STOP_FLOW',
         source: 'background',
-        payload: {},
+        payload: {
+          ...(stopReason ? { stopReason } : {}),
+        },
       });
     } catch { }
   }
@@ -12336,7 +12437,9 @@ const autoRunController = self.MultiPageBackgroundAutoRunController?.createAutoR
   isPhoneSmsPlatformRateLimitFailure,
   isPlusCheckoutNonFreeTrialFailure,
   isGpcTaskEndedFailure,
+  isInternalInterruptError,
   isRestartCurrentAttemptError,
+  isAutoRunSessionInactiveError,
   isStep4Route405RecoveryLimitFailure,
   isSignupUserAlreadyExistsFailure,
   isStopError,
@@ -12848,10 +12951,10 @@ async function runAutoSequenceFromNodeGraph(startNodeId, context = {}) {
 
     const reason = getErrorMessage(error);
     if (typeof cancelPendingCommands === 'function') {
-      cancelPendingCommands(`节点 ${nodeId} 5 分钟没有新日志，准备重开当前节点。`);
+      cancelPendingCommands(buildInternalInterruptError(INTERNAL_INTERRUPT_STOP_REASON).message);
     }
     if (typeof broadcastStopToContentScripts === 'function') {
-      await broadcastStopToContentScripts();
+      await broadcastStopToContentScripts({ stopReason: INTERNAL_INTERRUPT_STOP_REASON });
     }
     await addLog(
       `节点 ${nodeId}：5 分钟没有新日志，准备重新开始当前节点（第 ${idleRestartCount}/${AUTO_RUN_STEP_IDLE_RESTART_MAX_ATTEMPTS} 次）。原因：${reason}`,
@@ -13553,6 +13656,7 @@ const plusCheckoutCreateExecutor = self.MultiPageBackgroundPlusCheckoutCreate?.c
   failNodeFromBackground,
   fetch: typeof fetch === 'function' ? fetch.bind(globalThis) : null,
   getState,
+  isInternalInterruptError,
   requestStop,
   getLastNodeIdForState,
   markCurrentRegistrationAccountUsed,
@@ -15628,6 +15732,9 @@ chrome.runtime.onStartup.addListener(() => {
   restoreAutoRunTimerIfNeeded().catch((err) => {
     console.error(LOG_PREFIX, 'Failed to restore auto run timer on startup:', err);
   });
+  restoreActiveAutoRunIfNeeded().catch((err) => {
+    console.error(LOG_PREFIX, 'Failed to restore active auto run on startup:', err);
+  });
   disableLegacyIpProxyFeatureRuntime().catch((err) => {
     console.error(LOG_PREFIX, 'Failed to disable legacy IP proxy feature on startup:', err);
   });
@@ -15637,6 +15744,9 @@ chrome.runtime.onInstalled.addListener(() => {
   restoreAutoRunTimerIfNeeded().catch((err) => {
     console.error(LOG_PREFIX, 'Failed to restore auto run timer on install/update:', err);
   });
+  restoreActiveAutoRunIfNeeded().catch((err) => {
+    console.error(LOG_PREFIX, 'Failed to restore active auto run on install/update:', err);
+  });
   disableLegacyIpProxyFeatureRuntime().catch((err) => {
     console.error(LOG_PREFIX, 'Failed to disable legacy IP proxy feature on install/update:', err);
   });
@@ -15644,6 +15754,9 @@ chrome.runtime.onInstalled.addListener(() => {
 
 restoreAutoRunTimerIfNeeded().catch((err) => {
   console.error(LOG_PREFIX, 'Failed to restore auto run timer:', err);
+});
+restoreActiveAutoRunIfNeeded().catch((err) => {
+  console.error(LOG_PREFIX, 'Failed to restore active auto run:', err);
 });
 disableLegacyIpProxyFeatureRuntime().catch((err) => {
   console.error(LOG_PREFIX, 'Failed to disable legacy IP proxy feature:', err);

@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GuJumpgate Agent Control</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0f172a;
+      --panel: #111827;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --border: rgba(148, 163, 184, 0.28);
+      --accent: #22c55e;
+      --warn: #f59e0b;
+    }
+
+    body {
+      margin: 0;
+      padding: 16px;
+      font: 13px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif;
+      background: radial-gradient(circle at top, #1f2937 0%, var(--bg) 55%);
+      color: var(--text);
+    }
+
+    .shell {
+      max-width: 960px;
+      margin: 0 auto;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(17, 24, 39, 0.95), rgba(15, 23, 42, 0.95));
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+      overflow: hidden;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: center;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .status-chip {
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(34, 197, 94, 0.35);
+      background: rgba(34, 197, 94, 0.12);
+      color: #bbf7d0;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    main {
+      padding: 16px;
+    }
+
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: 12px/1.6 "JetBrains Mono", Consolas, monospace;
+      color: var(--text);
+    }
+
+    .hint {
+      margin-bottom: 12px;
+      color: var(--muted);
+    }
+
+    .hint strong {
+      color: var(--warn);
+      font-weight: 600;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="shell">
+    <header>
+      <div>
+        <h1>GuJumpgate Agent Control</h1>
+        <div class="subtitle">供后台 Agent / CDP Runner 使用的低噪音控制页</div>
+      </div>
+      <div id="agent-ready-badge" class="status-chip">初始化中</div>
+    </header>
+    <main>
+      <div class="hint">
+        这个页面不是给人工点按钮用的。推荐由外部 runner 直接调用
+        <strong>`window.GuJumpgateAgentControl`</strong> 暴露的方法。
+      </div>
+      <pre id="agent-status-output">正在加载控制器...</pre>
+    </main>
+  </div>
+  <script src="agent-control.js"></script>
+</body>
+
+</html>

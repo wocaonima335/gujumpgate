@@ -466,6 +466,11 @@
       return Number.isInteger(numeric) && numeric >= 0 ? numeric : null;
     }
 
+    function isOperatorPanelSource(source = '') {
+      const normalized = String(source || '').trim().toLowerCase();
+      return normalized === 'sidepanel' || normalized === 'agent-control';
+    }
+
     function resolveAutomationWindowIdFromMessage(message = {}, sender = {}) {
       return normalizeAutomationWindowId(
         message?.payload?.automationWindowId
@@ -1234,14 +1239,14 @@
           if (!nodeId || !resolvedStep) {
             throw new Error('EXECUTE_NODE 缺少 nodeId。');
           }
-          if (message.source === 'sidepanel') {
+          if (isOperatorPanelSource(message.source)) {
             await lockAutomationWindowFromMessage(message, sender);
             await ensureManualInteractionAllowed('手动执行节点');
           }
-          if (message.source === 'sidepanel') {
+          if (isOperatorPanelSource(message.source)) {
             await ensureManualStepPrerequisites(resolvedStep);
           }
-          if (message.source === 'sidepanel') {
+          if (isOperatorPanelSource(message.source)) {
             await invalidateDownstreamAfterStepRestart(resolvedStep, { logLabel: `节点 ${nodeId} 重新执行` });
           }
           if (message.payload.email) {
@@ -1254,7 +1259,7 @@
           await executeNodeForManualChain(nodeId);
 
           const latestExecutionState = await getState();
-          if (message.source === 'sidepanel' && shouldAutoContinueManualNode(nodeId, latestExecutionState)) {
+          if (isOperatorPanelSource(message.source) && shouldAutoContinueManualNode(nodeId, latestExecutionState)) {
             const nextNodeId = getNextNodeIdForState(nodeId, latestExecutionState);
             if (nextNodeId) {
               await addLog(
@@ -1270,7 +1275,7 @@
 
         case 'AUTO_RUN': {
           clearStopRequest();
-          if (message.source === 'sidepanel') {
+          if (isOperatorPanelSource(message.source)) {
             await lockAutomationWindowFromMessage(message, sender);
           }
           if (Boolean(message.payload?.contributionMode) && typeof setContributionMode === 'function') {
@@ -1302,7 +1307,7 @@
 
         case 'SCHEDULE_AUTO_RUN': {
           clearStopRequest();
-          if (message.source === 'sidepanel') {
+          if (isOperatorPanelSource(message.source)) {
             await lockAutomationWindowFromMessage(message, sender);
           }
           if (Boolean(message.payload?.contributionMode) && typeof setContributionMode === 'function') {
@@ -1331,7 +1336,7 @@
 
         case 'START_SCHEDULED_AUTO_RUN_NOW': {
           clearStopRequest();
-          if (message.source === 'sidepanel') {
+          if (isOperatorPanelSource(message.source)) {
             await lockAutomationWindowFromMessage(message, sender);
           }
           const started = await launchAutoRunTimerPlan('manual', {
@@ -1353,7 +1358,7 @@
 
         case 'SKIP_AUTO_RUN_COUNTDOWN': {
           clearStopRequest();
-          if (message.source === 'sidepanel') {
+          if (isOperatorPanelSource(message.source)) {
             await lockAutomationWindowFromMessage(message, sender);
           }
           const skipped = await skipAutoRunCountdown();
@@ -1365,7 +1370,7 @@
 
         case 'RESUME_AUTO_RUN': {
           clearStopRequest();
-          if (message.source === 'sidepanel') {
+          if (isOperatorPanelSource(message.source)) {
             await lockAutomationWindowFromMessage(message, sender);
           }
           if (message.payload.email) {
@@ -1581,7 +1586,7 @@
         }
 
         case 'PROBE_IP_PROXY_EXIT': {
-          if (message.source === 'sidepanel') {
+          if (isOperatorPanelSource(message.source)) {
             await lockAutomationWindowFromMessage(message, sender);
           }
           if (typeof probeIpProxyExit !== 'function') {
