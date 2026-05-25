@@ -20,6 +20,8 @@ const CDP = require('chrome-remote-interface');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
+const { applyFingerprintToDebugPort } = require('./proxy-fingerprint.js');
+const { pickProxyRegionFromState } = require('./shared/fingerprint-profile.js');
 
 const DEBUG_PORT = 9222;
 const DEFAULT_EXTENSION_ID = process.env.GUJUMPGATE_EXTENSION_ID || 'jbfdbapohpgallheekahoigcghkpkiin';
@@ -43,6 +45,18 @@ function readJsonInput(rawValue, fallback = {}) {
 
 function printJson(value) {
   console.log(JSON.stringify(value, null, 2));
+}
+
+function extractFingerprintProfileFromProfile(profile = {}) {
+  if (profile && typeof profile === 'object' && !Array.isArray(profile)) {
+    if (profile.fingerprintProfile !== undefined) {
+      return profile.fingerprintProfile;
+    }
+    if (profile.settings && typeof profile.settings === 'object' && !Array.isArray(profile.settings)) {
+      return profile.settings.fingerprintProfile ?? null;
+    }
+  }
+  return null;
 }
 
 async function fetchJson(endpoint) {
@@ -214,6 +228,18 @@ async function main() {
       }
       const profile = readJsonInput(rawInput);
       const result = await callAgentMethod('applyProfile', [profile]);
+      const fingerprintProfile = extractFingerprintProfileFromProfile(profile);
+      if (fingerprintProfile) {
+        const runtime = await applyFingerprintToDebugPort({
+          port: DEBUG_PORT,
+          profile: fingerprintProfile,
+          proxyRegion: pickProxyRegionFromState(profile?.settings || {}) || String(profile?.proxyRegion || '').trim(),
+          state: profile?.settings || {},
+          logger: console,
+        });
+        result.value.fingerprintRuntime = runtime.report;
+        await callAgentMethod('reportFingerprintRuntime', [runtime.report]).catch(() => {});
+      }
       printJson(result.value);
       return;
     }

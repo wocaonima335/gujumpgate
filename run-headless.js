@@ -12,6 +12,11 @@ const puppeteer = require('puppeteer-core');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const { createPuppeteerFingerprintSupervisor } = require('./proxy-fingerprint.js');
+const {
+  normalizeFingerprintProfile,
+  pickProxyRegionFromState,
+} = require('./shared/fingerprint-profile.js');
 
 const EXTENSION_PATH = path.resolve(__dirname);
 const DEFAULT_CHROME_PATH = process.env.GUJUMPGATE_CHROME_PATH || '/opt/google/chrome/chrome';
@@ -185,6 +190,16 @@ function resolvePhoneVerificationEnabled(config = {}) {
   );
 }
 
+function resolveFingerprintProfileInput(config = {}, settings = {}) {
+  if (Object.prototype.hasOwnProperty.call(config, 'fingerprintProfile')) {
+    return config.fingerprintProfile;
+  }
+  if (settings && typeof settings === 'object' && Object.prototype.hasOwnProperty.call(settings, 'fingerprintProfile')) {
+    return settings.fingerprintProfile;
+  }
+  return null;
+}
+
 function buildSettingsProfile(config = {}) {
   const settings = isPlainObject(config.settings) ? { ...config.settings } : {};
   const panelMode = resolvePanelMode(config);
@@ -258,6 +273,13 @@ function buildSettingsProfile(config = {}) {
     settings.nexSmsApiKey = String(config.nexSmsApiKey || config.smsApiKey || settings.nexSmsApiKey || '').trim();
   }
 
+  if (
+    Object.prototype.hasOwnProperty.call(config, 'fingerprintProfile')
+    || Object.prototype.hasOwnProperty.call(settings, 'fingerprintProfile')
+  ) {
+    settings.fingerprintProfile = normalizeFingerprintProfile(resolveFingerprintProfileInput(config, settings));
+  }
+
   return settings;
 }
 
@@ -265,12 +287,17 @@ function buildAgentProfile(config = {}) {
   const baseProfile = isPlainObject(config.agentProfile) ? { ...config.agentProfile } : {};
   const hotmailAccounts = deriveHotmailAccounts(config);
   const paypalAccounts = derivePayPalAccounts(config);
+  const mergedSettings = isPlainObject(baseProfile.settings) ? baseProfile.settings : {};
+  const fingerprintProfileInput = Object.prototype.hasOwnProperty.call(baseProfile, 'fingerprintProfile')
+    ? baseProfile.fingerprintProfile
+    : resolveFingerprintProfileInput(config, mergedSettings);
 
   const profile = {
     ...baseProfile,
     settings: buildSettingsProfile({
       ...config,
       ...(isPlainObject(baseProfile.settings) ? { settings: baseProfile.settings } : {}),
+      ...(fingerprintProfileInput !== null ? { fingerprintProfile: fingerprintProfileInput } : {}),
     }),
     hotmailAccounts: Array.isArray(baseProfile.hotmailAccounts) && baseProfile.hotmailAccounts.length
       ? baseProfile.hotmailAccounts
@@ -300,6 +327,7 @@ function buildAgentProfile(config = {}) {
     profile.signupPhoneNumber = config.signupPhoneNumber || config.phoneNumber;
   }
 
+  delete profile.fingerprintProfile;
   return profile;
 }
 
@@ -534,6 +562,7 @@ async function main() {
   const profile = buildAgentProfile(config);
   const startOptions = buildStartOptions(config);
   const panelMode = resolvePanelMode(config);
+  const fingerprintProfile = profile?.settings?.fingerprintProfile || null;
   const authDir = shouldExpectLocalAuthFiles(panelMode)
     ? path.resolve(String(
         profile?.settings?.localCpaJsonPluginDir
@@ -550,6 +579,9 @@ async function main() {
     plusModeEnabled: profile?.settings?.plusModeEnabled,
     plusPaymentMethod: profile?.settings?.plusPaymentMethod,
     phoneSmsProvider: profile?.settings?.phoneSmsProvider,
+    fingerprintEnabled: Boolean(fingerprintProfile),
+    fingerprintMode: String(fingerprintProfile?.mode || ''),
+    fingerprintCountryCode: String(fingerprintProfile?.countryCode || ''),
     totalRuns: startOptions.totalRuns,
     autoRunSkipFailures: startOptions.autoRunSkipFailures,
     authDir: authDir || null,
@@ -564,13 +596,45 @@ async function main() {
 
   const browser = await startBrowser(config);
   let keepBrowserOpen = normalizeBoolean(config.keepBrowserOpen, false);
+  let agentPage = null;
+  let fingerprintSupervisor = null;
+  let latestFingerprintStatus = null;
+
+  async function reportFingerprintStatus(status) {
+    latestFingerprintStatus = status;
+    if (!agentPage || !status || fingerprintProfile?.reportToAgentControl === false) {
+      return;
+    }
+    await callAgentControl(agentPage, 'reportFingerprintRuntime', status).catch(() => {});
+  }
 
   try {
+    if (fingerprintProfile) {
+      fingerprintSupervisor = await createPuppeteerFingerprintSupervisor({
+        browser,
+        profile: fingerprintProfile,
+        proxyRegion: pickProxyRegionFromState(profile?.settings || {}) || String(config.proxyRegion || '').trim(),
+        state: profile?.settings || {},
+        logger: console,
+        onStatus: (status) => {
+          reportFingerprintStatus(status).catch(() => {});
+        },
+      });
+      latestFingerprintStatus = {
+        ...fingerprintSupervisor.report,
+        resolvedProfile: fingerprintSupervisor.resolvedProfile || null,
+      };
+    }
+
     const extensionId = await resolveExtensionId(browser);
     console.log(`[Runner] 扩展 ID: ${extensionId}`);
 
-    const agentPage = await openAgentControlPage(browser, extensionId);
+    agentPage = await openAgentControlPage(browser, extensionId);
     console.log('[Runner] agent-control 页面已就绪');
+
+    if (latestFingerprintStatus) {
+      await reportFingerprintStatus(latestFingerprintStatus);
+    }
 
     const baselineFiles = authDir && fs.existsSync(authDir)
       ? fs.readdirSync(authDir).filter((fileName) => fileName.endsWith('.json'))
@@ -583,6 +647,10 @@ async function main() {
     console.log('[Runner] Profile 已注入');
     if (applyResult?.snapshot?.lastLogEntry?.message) {
       console.log(`[Runner] 当前日志: ${applyResult.snapshot.lastLogEntry.message}`);
+    }
+
+    if (latestFingerprintStatus) {
+      await reportFingerprintStatus(latestFingerprintStatus);
     }
 
     const startResult = await callAgentControl(agentPage, 'startRun', startOptions);
@@ -634,6 +702,9 @@ async function main() {
       await new Promise(() => {});
     }
   } finally {
+    if (fingerprintSupervisor) {
+      await fingerprintSupervisor.stop().catch(() => {});
+    }
     if (!keepBrowserOpen) {
       await browser.close().catch(() => {});
       console.log('[Runner] Chrome 已关闭');

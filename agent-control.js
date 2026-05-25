@@ -33,6 +33,13 @@
     return String(value || '').trim().toLowerCase();
   }
 
+  function normalizeFingerprintProfileInput(value = null) {
+    if (window.MultiPageFingerprintProfile?.normalizeFingerprintProfile) {
+      return window.MultiPageFingerprintProfile.normalizeFingerprintProfile(value);
+    }
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+  }
+
   function appendEvent(type, payload = {}) {
     state.events.push({
       type: String(type || 'unknown'),
@@ -160,8 +167,13 @@
     };
 
     const settings = normalizedProfile.settings && typeof normalizedProfile.settings === 'object'
-      ? normalizedProfile.settings
+      ? { ...normalizedProfile.settings }
       : {};
+    if (Object.prototype.hasOwnProperty.call(normalizedProfile, 'fingerprintProfile')) {
+      settings.fingerprintProfile = normalizeFingerprintProfileInput(normalizedProfile.fingerprintProfile);
+    } else if (Object.prototype.hasOwnProperty.call(settings, 'fingerprintProfile')) {
+      settings.fingerprintProfile = normalizeFingerprintProfileInput(settings.fingerprintProfile);
+    }
     if (Object.keys(settings).length) {
       result.settings = await sendRuntimeMessage('SAVE_SETTING', settings);
     }
@@ -212,6 +224,7 @@
       mail2925Count: result.mail2925?.accounts?.length || 0,
       hasCurrentEmail: Boolean(result.currentEmail?.email),
       hasSignupPhoneNumber: Boolean(result.signupPhoneNumber?.phoneNumber),
+      hasFingerprintProfile: Boolean(settings.fingerprintProfile),
     });
 
     return {
@@ -305,6 +318,20 @@
     return response;
   }
 
+  async function reportFingerprintRuntime(payload = {}) {
+    const response = await sendRuntimeMessage('REPORT_FINGERPRINT_RUNTIME', payload);
+    appendEvent('REPORT_FINGERPRINT_RUNTIME', {
+      status: String(payload?.status || '').trim().toLowerCase(),
+      appliedTargetCount: Math.max(0, Math.floor(Number(payload?.appliedTargetCount) || 0)),
+      lastError: String(payload?.lastError || '').trim(),
+    });
+    return {
+      ok: true,
+      response,
+      snapshot: await getSnapshot(),
+    };
+  }
+
   async function getSnapshot(options = {}) {
     const rawState = options.state && typeof options.state === 'object'
       ? options.state
@@ -384,6 +411,19 @@
           ? Number(rawState.automationWindowId)
           : null,
         sourceLastUrls: toPlainObject(rawState?.sourceLastUrls || {}),
+      },
+      fingerprint: {
+        profile: toPlainObject(rawState?.fingerprintProfile || null),
+        runtime: {
+          status: String(rawState?.fingerprintRuntimeStatus || 'idle'),
+          mode: String(rawState?.fingerprintRuntimeMode || ''),
+          startedAt: Number(rawState?.fingerprintRuntimeStartedAt || 0) || null,
+          lastAppliedAt: Number(rawState?.fingerprintRuntimeLastAppliedAt || 0) || null,
+          appliedTargetCount: Number(rawState?.fingerprintRuntimeAppliedTargetCount || 0) || 0,
+          lastTargetUrl: String(rawState?.fingerprintRuntimeLastTargetUrl || ''),
+          lastError: String(rawState?.fingerprintRuntimeLastError || ''),
+          resolvedProfile: toPlainObject(rawState?.fingerprintRuntimeResolvedProfile || null),
+        },
       },
       history: {
         total: accountRunHistory.length,
@@ -475,6 +515,7 @@
     getFullState,
     getRecentEvents,
     getSnapshot,
+    reportFingerprintRuntime,
     resetState,
     resumeRun,
     startRun,

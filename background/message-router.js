@@ -1388,6 +1388,32 @@
           return { ok: true };
         }
 
+        case 'REPORT_FINGERPRINT_RUNTIME': {
+          const payload = message.payload && typeof message.payload === 'object' && !Array.isArray(message.payload)
+            ? message.payload
+            : {};
+          const runtimePatch = {
+            fingerprintRuntimeStatus: String(payload.status || 'idle').trim().toLowerCase() || 'idle',
+            fingerprintRuntimeMode: String(payload.mode || '').trim().toLowerCase(),
+            fingerprintRuntimeStartedAt: Math.max(0, Number(payload.startedAt) || 0),
+            fingerprintRuntimeLastAppliedAt: Math.max(0, Number(payload.lastAppliedAt) || 0),
+            fingerprintRuntimeAppliedTargetCount: Math.max(0, Math.floor(Number(payload.appliedTargetCount) || 0)),
+            fingerprintRuntimeLastTargetUrl: String(payload.lastTargetUrl || '').trim(),
+            fingerprintRuntimeLastError: String(payload.lastError || '').trim(),
+            fingerprintRuntimeResolvedProfile: payload.resolvedProfile && typeof payload.resolvedProfile === 'object' && !Array.isArray(payload.resolvedProfile)
+              ? payload.resolvedProfile
+              : null,
+          };
+          await setState(runtimePatch);
+          if (typeof broadcastDataUpdate === 'function') {
+            broadcastDataUpdate(runtimePatch);
+          }
+          return {
+            ok: true,
+            state: await getState(),
+          };
+        }
+
         case 'SKIP_NODE': {
           const nodeId = String(message.nodeId || message.payload?.nodeId || '').trim();
           if (!nodeId) {

@@ -1,6 +1,7 @@
 // background.js — Service Worker: orchestration, state, tab management, message routing
 
 importScripts(
+  'shared/fingerprint-profile.js',
   'shared/source-registry.js',
   'shared/flow-capabilities.js',
   'shared/session-to-json-converter.js',
@@ -985,6 +986,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   ipProxyUsername: '',
   ipProxyPassword: '',
   ipProxyRegion: '',
+  fingerprintProfile: null,
   codex2apiUrl: DEFAULT_CODEX2API_URL,
   codex2apiAdminKey: '',
   customPassword: '',
@@ -1198,6 +1200,14 @@ const DEFAULT_STATE = {
   plusCheckoutCountry: 'DE',
   plusCheckoutCurrency: 'EUR',
   plusCheckoutSource: '',
+  fingerprintRuntimeStatus: 'idle',
+  fingerprintRuntimeMode: '',
+  fingerprintRuntimeStartedAt: 0,
+  fingerprintRuntimeLastAppliedAt: 0,
+  fingerprintRuntimeAppliedTargetCount: 0,
+  fingerprintRuntimeLastTargetUrl: '',
+  fingerprintRuntimeLastError: '',
+  fingerprintRuntimeResolvedProfile: null,
   hostedCheckoutCurrentSmsEntry: null,
   plusBillingCountryText: '',
   plusBillingAddress: null,
@@ -2942,6 +2952,10 @@ function normalizePersistentSettingValue(key, value) {
       return String(value || '');
     case 'ipProxyRegion':
       return String(value || '').trim();
+    case 'fingerprintProfile':
+      return self.MultiPageFingerprintProfile?.normalizeFingerprintProfile
+        ? self.MultiPageFingerprintProfile.normalizeFingerprintProfile(value)
+        : (value && typeof value === 'object' && !Array.isArray(value) ? value : null);
     case 'ipProxyApiPool':
       return normalizeProxyPoolEntries(
         value,

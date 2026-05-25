@@ -436,6 +436,8 @@ Runner 建议只做这些事：
 
 建议把 profile 文件单独保存，而不是每次用一长串命令行参数手敲。
 
+如果你的链路需要按国家切换浏览器指纹，可直接参考 [fingerprintProfile标准配置模板](./fingerprintProfile标准配置模板.md)。
+
 优点：
 
 - 易复用
