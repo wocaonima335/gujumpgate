@@ -20,6 +20,11 @@
 3. `agent-control.js` 在页面上下文暴露 `window.GuJumpgateAgentControl.*`。
 4. 外部进程只调用统一方法，例如：
    - `applyProfile(...)`
+   - `getWorkflowNodes()`
+   - `getFlowPresets()`
+   - `executeNode(...)`
+   - `executeNodeSequence(...)`
+   - `runFlowPreset(...)`
    - `startRun(...)`
    - `stopRun()`
    - `getSnapshot(...)`
@@ -93,6 +98,28 @@
 
 适合已有 Chrome 会话的场景。
 
+如果当前执行任务的 Agent 明确 **不能使用无头浏览器**，请固定使用这一条链路，不要改走 `run-headless.js`。
+
+推荐方式：
+
+1. 先手动或外部工具启动一个带扩展的 Chrome，并开放 `9222` 调试端口。
+2. 再用 `cdp-controller.js` 打开 `agent-control.html`、注入 profile、启动流程。
+
+手机号注册参考 sample：
+
+```powershell
+node cdp-controller.js config .\docs\agent-phone-register.sample.json
+node cdp-controller.js start
+```
+
+这份 sample 的目标是：
+
+- 强制走 `signupMethod=phone`
+- 开启接码能力
+- 关闭 `plusModeEnabled`
+- 关闭“绑定邮箱后重登”补链
+- 让 Agent 只走“普通手机号注册链”
+
 查看当前结构化状态：
 
 ```powershell
@@ -141,6 +168,32 @@ node cdp-controller.js takeover
 node cdp-controller.js screenshot .\\agent-control.png
 ```
 
+查看当前模式下的可用节点：
+
+```powershell
+node cdp-controller.js workflow
+```
+
+只执行单个节点：
+
+```powershell
+node cdp-controller.js node plus-checkout-create
+```
+
+按自定义顺序执行节点序列：
+
+```powershell
+node cdp-controller.js sequence "[\"open-chatgpt\",\"submit-signup-email\",\"fill-password\"]"
+```
+
+执行内置流程预设：
+
+```powershell
+node cdp-controller.js preset register_only
+node cdp-controller.js preset paypal_only
+node cdp-controller.js preset register_plus_paypal
+```
+
 ### 4.2 方式 B：使用 `run-headless.js`
 
 适合需要直接由 Runner 启动无头浏览器的场景。
@@ -181,6 +234,197 @@ node run-headless.js ^
 6. 按固定间隔轮询 `getSnapshot(...)`
 7. 成功时优先判断是否产生新认证文件
 8. 失败时自动输出诊断 JSON 和截图
+
+### 4.3 方式 C：只跑指定流程 / 自定义流程
+
+如果你不想直接启动整条自动链，而是希望 Agent 只执行：
+
+- 注册流程
+- PayPal 流程
+- 你自己定义的节点序列
+
+那么应优先使用：
+
+- `getWorkflowNodes()`
+- `executeNode(...)`
+- `executeNodeSequence(...)`
+- `runFlowPreset(...)`
+
+而不是直接调用 `startRun(...)`。
+
+#### 4.3.1 先查看当前可用节点
+
+无论你想只跑注册、只跑 PayPal，还是拼自定义链，第一步都建议先看：
+
+```powershell
+node cdp-controller.js workflow
+```
+
+它会返回当前状态下可执行的节点列表，例如：
+
+- `open-chatgpt`
+- `submit-signup-email`
+- `fill-password`
+- `fetch-signup-code`
+- `fill-profile`
+- `wait-registration-success`
+- `plus-checkout-create`
+- `plus-checkout-billing`
+- `paypal-approve`
+- `plus-checkout-return`
+- `oauth-login`
+- `fetch-login-code`
+- `confirm-oauth`
+- `platform-verify`
+
+注意：
+
+- 节点列表是**当前模式下**的结果。
+- 如果你切了 `panelMode / plusModeEnabled / plusPaymentMethod / signupMethod`，这里的节点会跟着变。
+
+#### 4.3.2 只执行注册流程
+
+适用目标：
+
+- 只想跑注册，不进入 Plus / PayPal。
+
+推荐前置设置：
+
+- `plusModeEnabled=false`
+- `signupMethod=email` 或 `signupMethod=phone`
+- 接码、邮箱 provider 等配置已准备好
+
+内置预设：
+
+```powershell
+node cdp-controller.js preset register_only
+```
+
+等价节点序列：
+
+```json
+[
+  "open-chatgpt",
+  "submit-signup-email",
+  "fill-password",
+  "fetch-signup-code",
+  "fill-profile",
+  "wait-registration-success"
+]
+```
+
+如果你的 Agent 已能直接调用扩展页方法，也可以这样：
+
+```js
+await window.GuJumpgateAgentControl.executeNodeSequence([
+  'open-chatgpt',
+  'submit-signup-email',
+  'fill-password',
+  'fetch-signup-code',
+  'fill-profile',
+  'wait-registration-success'
+]);
+```
+
+#### 4.3.3 只执行 PayPal 流程
+
+适用目标：
+
+- 注册已经完成
+- 当前账号已经登录到 ChatGPT
+- 只想执行 Plus / PayPal 支付链
+
+推荐前置设置：
+
+- `plusModeEnabled=true`
+- `plusPaymentMethod=paypal`
+- 当前浏览器会话中应已满足支付链的前置状态
+- 如果你想要完整 PayPal 长链，应确保不是 hosted checkout 短链场景
+
+内置预设：
+
+```powershell
+node cdp-controller.js preset paypal_only
+```
+
+等价节点序列：
+
+```json
+[
+  "plus-checkout-create",
+  "plus-checkout-billing",
+  "paypal-approve",
+  "plus-checkout-return"
+]
+```
+
+如果你想单步调试，也可以逐个执行：
+
+```powershell
+node cdp-controller.js node plus-checkout-create
+node cdp-controller.js node plus-checkout-billing
+node cdp-controller.js node paypal-approve
+node cdp-controller.js node plus-checkout-return
+```
+
+#### 4.3.4 注册 + PayPal 一起执行，但不跑后续 OAuth / 平台接入
+
+适用目标：
+
+- 只想打通注册 + 支付，不继续跑 `oauth-login / confirm-oauth / platform-verify`
+
+内置预设：
+
+```powershell
+node cdp-controller.js preset register_plus_paypal
+```
+
+等价节点序列：
+
+```json
+[
+  "open-chatgpt",
+  "submit-signup-email",
+  "fill-password",
+  "fetch-signup-code",
+  "fill-profile",
+  "plus-checkout-create",
+  "plus-checkout-billing",
+  "paypal-approve",
+  "plus-checkout-return"
+]
+```
+
+#### 4.3.5 完全自定义流程
+
+如果你希望 Agent 自己组合流程，可以直接传一个节点数组。
+
+示例：
+
+```powershell
+node cdp-controller.js sequence "{\"nodeIds\":[\"open-chatgpt\",\"submit-signup-email\",\"fill-password\"],\"options\":{\"interNodeDelayMs\":1200}}"
+```
+
+如果直接调用扩展页 API：
+
+```js
+await window.GuJumpgateAgentControl.executeNodeSequence(
+  ['open-chatgpt', 'submit-signup-email', 'fill-password'],
+  {
+    interNodeDelayMs: 1200,
+    stopOnError: true
+  }
+);
+```
+
+#### 4.3.6 为什么推荐 `executeNodeSequence(...)` 而不是手工拼旧消息
+
+因为它有几个好处：
+
+- 统一走 `agent-control` 协议层
+- 每执行一个节点后都能回读结构化 `snapshot`
+- 默认关闭 `plus-checkout-create` 的自动续跑，避免“只想测单节点，却意外继续跑到下游”
+- 比直接拼 `chrome.runtime.sendMessage(...)` 更稳定，也更便于后续扩展
 
 ## 5. Profile 格式
 

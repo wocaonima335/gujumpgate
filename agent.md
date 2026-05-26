@@ -80,6 +80,13 @@ node cdp-controller.js diag
 node cdp-controller.js events 20
 ```
 
+如果当前 Agent 明确不能使用无头浏览器：
+
+- 不要走 `run-headless.js`
+- 固定使用“已打开 Chrome + `cdp-controller.js` + `agent-control.html`”这条链
+- 手机号注册可直接参考：
+  - `docs/agent-phone-register.sample.json`
+
 如果你需要从零启动无头 Chrome，则优先用：
 
 ```powershell

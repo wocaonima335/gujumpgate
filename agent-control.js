@@ -5,6 +5,34 @@
   const DEFAULT_LOG_LIMIT = 20;
   const DEFAULT_EVENT_LIMIT = 20;
   const REFRESH_INTERVAL_MS = 3000;
+  const DEFAULT_SEQUENCE_INTER_NODE_DELAY_MS = 800;
+  const FLOW_PRESETS = Object.freeze({
+    register_only: Object.freeze([
+      'open-chatgpt',
+      'submit-signup-email',
+      'fill-password',
+      'fetch-signup-code',
+      'fill-profile',
+      'wait-registration-success',
+    ]),
+    paypal_only: Object.freeze([
+      'plus-checkout-create',
+      'plus-checkout-billing',
+      'paypal-approve',
+      'plus-checkout-return',
+    ]),
+    register_plus_paypal: Object.freeze([
+      'open-chatgpt',
+      'submit-signup-email',
+      'fill-password',
+      'fetch-signup-code',
+      'fill-profile',
+      'plus-checkout-create',
+      'plus-checkout-billing',
+      'paypal-approve',
+      'plus-checkout-return',
+    ]),
+  });
 
   const state = {
     readyAt: Date.now(),
@@ -31,6 +59,14 @@
 
   function normalizeEmailKey(value = '') {
     return String(value || '').trim().toLowerCase();
+  }
+
+  function normalizeNodeId(value = '') {
+    return String(value || '').trim();
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   function normalizeFingerprintProfileInput(value = null) {
@@ -318,6 +354,142 @@
     return response;
   }
 
+  function getFlowPresets() {
+    return Object.fromEntries(
+      Object.entries(FLOW_PRESETS).map(([presetId, nodeIds]) => [presetId, nodeIds.slice()])
+    );
+  }
+
+  async function getWorkflowNodes() {
+    const response = await sendRuntimeMessage('GET_WORKFLOW_NODES', {});
+    appendEvent('GET_WORKFLOW_NODES', {
+      flowId: String(response?.flowId || ''),
+      count: Array.isArray(response?.nodes) ? response.nodes.length : 0,
+    });
+    return response;
+  }
+
+  async function executeNode(nodeId, options = {}) {
+    const normalizedNodeId = normalizeNodeId(nodeId);
+    if (!normalizedNodeId) {
+      throw new Error('executeNode 缺少 nodeId。');
+    }
+    const payload = {
+      nodeId: normalizedNodeId,
+      autoContinue: options.autoContinue !== undefined ? Boolean(options.autoContinue) : false,
+    };
+    if (options.email) {
+      payload.email = String(options.email || '').trim();
+    }
+    if (options.emailPrefix !== undefined) {
+      payload.emailPrefix = String(options.emailPrefix || '');
+    }
+    const response = await sendRuntimeMessage('EXECUTE_NODE', payload);
+    appendEvent('EXECUTE_NODE', {
+      nodeId: normalizedNodeId,
+      autoContinue: payload.autoContinue,
+      hasEmail: Boolean(payload.email),
+      hasEmailPrefix: payload.emailPrefix !== undefined,
+    });
+    return {
+      ok: true,
+      response,
+      snapshot: await getSnapshot(),
+    };
+  }
+
+  async function executeNodeSequence(nodeIds = [], options = {}) {
+    const normalizedNodeIds = Array.isArray(nodeIds)
+      ? nodeIds.map(normalizeNodeId).filter(Boolean)
+      : [];
+    if (!normalizedNodeIds.length) {
+      throw new Error('executeNodeSequence 缺少 nodeIds。');
+    }
+
+    const stopOnError = options.stopOnError !== false;
+    const interNodeDelayMs = Math.max(
+      0,
+      Math.floor(Number(options.interNodeDelayMs) || DEFAULT_SEQUENCE_INTER_NODE_DELAY_MS)
+    );
+    const perNodeOptions = options.perNodeOptions && typeof options.perNodeOptions === 'object' && !Array.isArray(options.perNodeOptions)
+      ? options.perNodeOptions
+      : {};
+    const results = [];
+
+    for (let index = 0; index < normalizedNodeIds.length; index += 1) {
+      const currentNodeId = normalizedNodeIds[index];
+      const mergedNodeOptions = {
+        autoContinue: options.autoContinue !== undefined ? Boolean(options.autoContinue) : false,
+        ...(perNodeOptions[currentNodeId] && typeof perNodeOptions[currentNodeId] === 'object'
+          ? perNodeOptions[currentNodeId]
+          : {}),
+      };
+      if (options.email && mergedNodeOptions.email === undefined) {
+        mergedNodeOptions.email = options.email;
+      }
+      if (options.emailPrefix !== undefined && mergedNodeOptions.emailPrefix === undefined) {
+        mergedNodeOptions.emailPrefix = options.emailPrefix;
+      }
+
+      try {
+        const result = await executeNode(currentNodeId, mergedNodeOptions);
+        results.push({
+          ok: true,
+          nodeId: currentNodeId,
+          snapshot: result.snapshot || null,
+        });
+      } catch (error) {
+        const failedSnapshot = await getSnapshot().catch(() => null);
+        results.push({
+          ok: false,
+          nodeId: currentNodeId,
+          error: error?.message || String(error || 'execute node failed'),
+          snapshot: failedSnapshot,
+        });
+        appendEvent('EXECUTE_NODE_SEQUENCE_ERROR', {
+          nodeId: currentNodeId,
+          error: error?.message || String(error || 'execute node failed'),
+        });
+        if (stopOnError) {
+          return {
+            ok: false,
+            results,
+            snapshot: failedSnapshot,
+          };
+        }
+      }
+
+      if (index < normalizedNodeIds.length - 1 && interNodeDelayMs > 0) {
+        await sleep(interNodeDelayMs);
+      }
+    }
+
+    const snapshot = await getSnapshot();
+    appendEvent('EXECUTE_NODE_SEQUENCE', {
+      count: normalizedNodeIds.length,
+      stopOnError,
+      interNodeDelayMs,
+    });
+    return {
+      ok: results.every((entry) => entry.ok),
+      results,
+      snapshot,
+    };
+  }
+
+  async function runFlowPreset(presetId = '', options = {}) {
+    const normalizedPresetId = String(presetId || '').trim().toLowerCase();
+    const nodeIds = FLOW_PRESETS[normalizedPresetId];
+    if (!Array.isArray(nodeIds) || !nodeIds.length) {
+      throw new Error(`未知流程预设：${presetId}`);
+    }
+    appendEvent('RUN_FLOW_PRESET', {
+      presetId: normalizedPresetId,
+      count: nodeIds.length,
+    });
+    return executeNodeSequence(nodeIds, options);
+  }
+
   async function reportFingerprintRuntime(payload = {}) {
     const response = await sendRuntimeMessage('REPORT_FINGERPRINT_RUNTIME', payload);
     appendEvent('REPORT_FINGERPRINT_RUNTIME', {
@@ -511,13 +683,18 @@
   window.GuJumpgateAgentControl = {
     applyProfile,
     captureDiagnostics,
+    executeNode,
+    executeNodeSequence,
     exportSettings,
+    getFlowPresets,
     getFullState,
     getRecentEvents,
     getSnapshot,
+    getWorkflowNodes,
     reportFingerprintRuntime,
     resetState,
     resumeRun,
+    runFlowPreset,
     startRun,
     stopRun,
     takeOverRun,

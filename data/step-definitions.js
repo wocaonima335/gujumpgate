@@ -348,6 +348,8 @@
     if (panelMode === LOCAL_CPA_JSON_NO_RT_PANEL_MODE) {
       return [
         ...PLUS_PAYPAL_HOSTED_CHECKOUT_PREFIX_STEP_DEFINITIONS,
+        { id: 7, order: 65, key: 'oauth-login', title: '刷新 OAuth 并登录', sourceId: 'openai-auth', driverId: 'content/signup-page', command: 'oauth-login' },
+        { id: 8, order: 68, key: 'confirm-oauth', title: '自动确认 OAuth', sourceId: 'openai-auth', driverId: 'content/signup-page', command: 'confirm-oauth' },
         LOCAL_CPA_JSON_NO_RT_EXPORT_STEP_DEFINITION,
       ];
     }

@@ -1,0 +1,59 @@
+{
+  "settings": {
+    "activeFlowId": "openai",
+    "panelMode": "local-cpa-json",
+    "signupMethod": "phone",
+    "phoneVerificationEnabled": true,
+    "phoneSignupReloginAfterBindEmailEnabled": false,
+    "plusModeEnabled": false,
+    "mailProvider": "hotmail",
+    "hotmailServiceMode": "local",
+    "hotmailLocalBaseUrl": "http://127.0.0.1:17373",
+    "accountRunHistoryHelperBaseUrl": "http://127.0.0.1:17373",
+    "accountRunHistoryTextEnabled": true,
+    "phoneSmsProvider": "5sim",
+    "fiveSimApiKey": "replace-with-your-5sim-key",
+    "fiveSimCountryId": "argentina",
+    "fiveSimCountryLabel": "Argentina",
+    "fiveSimProduct": "go",
+    "fiveSimOperator": "any",
+    "operationDelayEnabled": true,
+    "oauthFlowTimeoutEnabled": true,
+    "fingerprintProfile": {
+      "enabled": true,
+      "mode": "proxy_region",
+      "countryCode": "US",
+      "platform": "Win32",
+      "hardwareConcurrency": 8,
+      "deviceMemory": 8,
+      "maxTouchPoints": 0,
+      "screen": {
+        "width": 1920,
+        "height": 1080,
+        "availWidth": 1920,
+        "availHeight": 1040,
+        "colorDepth": 24,
+        "pixelDepth": 24,
+        "devicePixelRatio": 1
+      },
+      "canvasNoise": 0.12,
+      "audioNoise": 0.00002,
+      "seed": "agent-phone-register-sample",
+      "grantGeolocation": true,
+      "reportToAgentControl": true
+    }
+  },
+  "hotmailAccounts": [
+    {
+      "email": "replace-with-your-hotmail@outlook.com",
+      "password": "replace-with-your-hotmail-password",
+      "clientId": "replace-with-your-hotmail-client-id",
+      "refreshToken": "replace-with-your-hotmail-refresh-token",
+      "status": "authorized",
+      "enabled": true,
+      "used": false
+    }
+  ],
+  "selectHotmailEmail": "replace-with-your-hotmail@outlook.com",
+  "signupPhoneNumber": "+14155550123"
+}

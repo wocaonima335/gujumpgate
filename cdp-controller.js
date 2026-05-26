@@ -13,6 +13,10 @@
  *   node cdp-controller.js takeover
  *   node cdp-controller.js diag [json-file-or-json-string]
  *   node cdp-controller.js events [count]
+ *   node cdp-controller.js workflow
+ *   node cdp-controller.js node <node-id-or-json-string>
+ *   node cdp-controller.js sequence <json-array-or-json-object>
+ *   node cdp-controller.js preset <preset-name-or-json>
  *   node cdp-controller.js screenshot [output-path]
  */
 
@@ -41,6 +45,17 @@ function readJsonInput(rawValue, fallback = {}) {
     return JSON.parse(fs.readFileSync(candidatePath, 'utf8'));
   }
   return JSON.parse(rawValue);
+}
+
+function readJsonInputOrRawString(rawValue, fallback = '') {
+  if (!rawValue) {
+    return fallback;
+  }
+  try {
+    return readJsonInput(rawValue, fallback);
+  } catch {
+    return String(rawValue || '');
+  }
 }
 
 function printJson(value) {
@@ -222,6 +237,12 @@ async function main() {
       return;
     }
 
+    case 'workflow': {
+      const result = await callAgentMethod('getWorkflowNodes');
+      printJson(result.value);
+      return;
+    }
+
     case 'config': {
       if (!rawInput) {
         throw new Error('用法: node cdp-controller.js config <json-file-or-json-string>');
@@ -247,6 +268,62 @@ async function main() {
     case 'start': {
       const options = readJsonInput(rawInput, {});
       const result = await callAgentMethod('startRun', [options]);
+      printJson(result.value);
+      return;
+    }
+
+    case 'node': {
+      if (!rawInput) {
+        throw new Error('鐢ㄦ硶: node cdp-controller.js node <node-id-or-json-string>');
+      }
+      const parsed = readJsonInputOrRawString(rawInput, '');
+      const payload = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed
+        : { nodeId: String(parsed || '').trim() };
+      const nodeId = String(payload.nodeId || '').trim();
+      if (!nodeId) {
+        throw new Error('node 命令缺少 nodeId。');
+      }
+      const result = await callAgentMethod('executeNode', [nodeId, payload]);
+      printJson(result.value);
+      return;
+    }
+
+    case 'sequence': {
+      if (!rawInput) {
+        throw new Error('鐢ㄦ硶: node cdp-controller.js sequence <json-array-or-json-object>');
+      }
+      const parsed = readJsonInput(rawInput, []);
+      if (Array.isArray(parsed)) {
+        const result = await callAgentMethod('executeNodeSequence', [parsed, {}]);
+        printJson(result.value);
+        return;
+      }
+      const nodeIds = Array.isArray(parsed?.nodeIds) ? parsed.nodeIds : [];
+      const options = parsed?.options && typeof parsed.options === 'object' && !Array.isArray(parsed.options)
+        ? parsed.options
+        : {};
+      const result = await callAgentMethod('executeNodeSequence', [nodeIds, options]);
+      printJson(result.value);
+      return;
+    }
+
+    case 'preset': {
+      if (!rawInput) {
+        throw new Error('鐢ㄦ硶: node cdp-controller.js preset <preset-name-or-json>');
+      }
+      const parsed = readJsonInputOrRawString(rawInput, '');
+      const payload = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed
+        : { presetId: String(parsed || '').trim() };
+      const presetId = String(payload.presetId || '').trim();
+      if (!presetId) {
+        throw new Error('preset 命令缺少 presetId。');
+      }
+      const options = payload.options && typeof payload.options === 'object' && !Array.isArray(payload.options)
+        ? payload.options
+        : {};
+      const result = await callAgentMethod('runFlowPreset', [presetId, options]);
       printJson(result.value);
       return;
     }

@@ -340,6 +340,14 @@
       return normalizePlusPaymentMethod(state?.plusPaymentMethod) === 'paypal';
     }
 
+    function shouldAutoContinueManualNodeFromMessage(message = {}, nodeId = '', state = {}) {
+      const explicitAutoContinue = message?.payload?.autoContinue;
+      if (explicitAutoContinue !== undefined) {
+        return Boolean(explicitAutoContinue);
+      }
+      return shouldAutoContinueManualNode(nodeId, state);
+    }
+
     async function executeNodeForManualChain(nodeId) {
       const executionState = await getState();
       if (doesNodeUseCompletionSignal(nodeId, executionState)) {
@@ -1259,7 +1267,10 @@
           await executeNodeForManualChain(nodeId);
 
           const latestExecutionState = await getState();
-          if (isOperatorPanelSource(message.source) && shouldAutoContinueManualNode(nodeId, latestExecutionState)) {
+          if (
+            isOperatorPanelSource(message.source)
+            && shouldAutoContinueManualNodeFromMessage(message, nodeId, latestExecutionState)
+          ) {
             const nextNodeId = getNextNodeIdForState(nodeId, latestExecutionState);
             if (nextNodeId) {
               await addLog(
@@ -1271,6 +1282,46 @@
             }
           }
           return { ok: true };
+        }
+
+        case 'GET_WORKFLOW_NODES': {
+          const state = await getState();
+          const nodeIds = typeof getNodeIdsForState === 'function'
+            ? getNodeIdsForState(state)
+            : [];
+          const nodes = (Array.isArray(nodeIds) ? nodeIds : [])
+            .map((nodeId) => {
+              const normalizedNodeId = String(nodeId || '').trim();
+              if (!normalizedNodeId) {
+                return null;
+              }
+              const definition = typeof getNodeDefinitionForState === 'function'
+                ? getNodeDefinitionForState(normalizedNodeId, state)
+                : null;
+              const stepId = typeof getStepIdByNodeIdForState === 'function'
+                ? getStepIdByNodeIdForState(normalizedNodeId, state)
+                : 0;
+              return {
+                nodeId: normalizedNodeId,
+                step: Number.isInteger(stepId) ? stepId : 0,
+                title: String(definition?.title || '').trim(),
+                executeKey: String(definition?.executeKey || definition?.command || normalizedNodeId).trim(),
+                sourceId: String(definition?.sourceId || '').trim(),
+                driverId: String(definition?.driverId || '').trim(),
+                next: Array.isArray(definition?.next) ? definition.next.slice() : [],
+              };
+            })
+            .filter(Boolean);
+          return {
+            ok: true,
+            flowId: String(state?.activeFlowId || state?.flowId || '').trim(),
+            panelMode: String(state?.panelMode || '').trim(),
+            signupMethod: String(state?.signupMethod || '').trim(),
+            resolvedSignupMethod: String(state?.resolvedSignupMethod || '').trim(),
+            plusModeEnabled: Boolean(state?.plusModeEnabled),
+            plusPaymentMethod: String(state?.plusPaymentMethod || '').trim(),
+            nodes,
+          };
         }
 
         case 'AUTO_RUN': {
